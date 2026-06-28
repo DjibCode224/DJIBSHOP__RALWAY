@@ -258,7 +258,10 @@ def _delete_upload(url: str, shop: str = "matelas") -> None:
     if not url:
         return
     base_dir = PUBLIC_MEUBLES_DIR if shop == "meubles" else PUBLIC_DIR
-    path = base_dir / url.lstrip("/")
+    relative = url.lstrip("/")
+    if shop == "meubles" and relative.startswith("meubles/"):
+        relative = relative[len("meubles/"):]
+    path = base_dir/relative
     try:
         path.unlink(missing_ok=True)
     except OSError as exc:
@@ -289,7 +292,8 @@ def save_base64_image(image_data: str, filename_prefix: str, shop: str = "matela
     target_dir.mkdir(parents=True, exist_ok=True)
     output_path = target_dir / filename
     output_path.write_bytes(file_bytes)
-    return f"/uploads/{filename}"
+    prefix = "/meubles/uploads" if shop == "meubles" else "/uploads"
+    return f"{prefix}/{filename}"
 
 
 def init_database() -> None:
