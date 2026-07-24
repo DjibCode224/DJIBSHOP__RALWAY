@@ -13,6 +13,7 @@ const state = {
     orders: [],
     contacts: [],
     imageData: "",
+    imagesData: [],
     homeImageData: "",
     ordersSort: "created-desc",
     contactsSort: "created-desc",
@@ -291,12 +292,20 @@ function openProductModal(productId) {
   const product = getProductById(productId);
   if (!product) return;
   state.activeProductId = productId;
-  const visual = product.image_url
-    ? `<div class="product-detail-visual"><img src="${escapeHtml(product.image_url)}" alt="${escapeHtml(product.name)}"></div>`
-    : `<div class="product-detail-visual"><div class="product-placeholder">🛏️</div></div>`;
+  const gallery = (product.images && product.images.length ? product.images : [product.image_url]).filter(Boolean);
+  const mainImage = gallery[0] || "";
+  const visual = mainImage
+    ? `<div class="product-detail-visual" id="detail-main-visual"><img src="${escapeHtml(mainImage)}" alt="${escapeHtml(product.name)}"></div>`
+    : `<div class="product-detail-visual" id="detail-main-visual"><div class="product-placeholder">🛋️</div></div>`;
+  const thumbs = gallery.length > 1
+    ? `<div class="gallery-thumbs">
+        ${gallery.map((url, i) => `<img src="${escapeHtml(url)}" class="gallery-thumb ${i === 0 ? "active" : ""}" data-src="${escapeHtml(url)}" alt="Photo ${i + 1}">`).join("")}
+      </div>`
+    : "";
   document.getElementById("product-detail").innerHTML = `
     ${visual}
     <div class="detail-copy">
+      ${thumbs}
       <div class="detail-header">
         <span class="badge">${escapeHtml(product.category)}</span>
         <span class="badge">${escapeHtml(stockClassName(product.stock_status))}</span>
@@ -318,6 +327,13 @@ function openProductModal(productId) {
       </div>
     </div>
   `;
+  document.querySelectorAll(".gallery-thumb").forEach((thumb) => {
+    thumb.addEventListener("click", () => {
+      document.querySelector("#detail-main-visual img").src = thumb.dataset.src;
+      document.querySelectorAll(".gallery-thumb").forEach((t) => t.classList.remove("active"));
+      thumb.classList.add("active");
+    });
+  });
   document.getElementById("detail-order-btn").addEventListener("click", () => {
     closeProductModal();
     openOrderModal(product.id);
@@ -560,6 +576,7 @@ function switchAdminTab(tab) {
 
 function resetProductForm() {
   state.admin.imageData = "";
+  state.admin.imagesData = [];
   const form = document.getElementById("product-form");
   form.reset();
   form.querySelector('[name="id"]').value = "";
@@ -572,6 +589,8 @@ function resetProductForm() {
 function populateProductForm(productId) {
   const product = state.admin.products.find((item) => item.id === productId);
   if (!product) return;
+  state.admin.imagesData = [];
+  state.admin.imageData = "";
   const form = document.getElementById("product-form");
   form.querySelector('[name="id"]').value = String(product.id);
   form.querySelector('[name="name"]').value = product.name;
@@ -586,8 +605,9 @@ function populateProductForm(productId) {
   form.querySelector('[name="featured"]').checked = product.featured;
   form.querySelector('[name="description"]').value = product.description;
   document.getElementById("product-form-title").textContent = "Modifier un produit";
-  document.getElementById("product-image-preview").innerHTML = product.image_url
-    ? `<img src="${escapeHtml(product.image_url)}" alt="${escapeHtml(product.name)}">`
+  const existingImages = product.images && product.images.length ? product.images : (product.image_url ? [product.image_url] : []);
+  document.getElementById("product-image-preview").innerHTML = existingImages.length
+    ? existingImages.map((src) => `<img src="${escapeHtml(src)}" alt="${escapeHtml(product.name)}" style="width:90px;height:90px;object-fit:cover;border-radius:10px;margin:4px">`).join("")
     : "Aucune image";
   switchAdminTab("editor");
 }
@@ -619,7 +639,8 @@ async function submitProductForm(event) {
     stock_status: form.querySelector('[name="stock_status"]').value,
     featured: form.querySelector('[name="featured"]').checked,
     description: form.querySelector('[name="description"]').value.trim(),
-    image_data: state.admin.imageData,
+    image_data: state.admin.imagesData[0] || "",
+    images_data: state.admin.imagesData,
   };
   const isEdit = Boolean(payload.id);
   try {
@@ -640,18 +661,27 @@ function bindImageInput() {
   const input = document.querySelector('#product-form [name="image_file"]');
   if (!input) return;
   input.addEventListener("change", (event) => {
-    const file = event.target.files?.[0];
-    if (!file) {
-      state.admin.imageData = "";
+    const files = Array.from(event.target.files || []).slice(0, 6);
+    if (!files.length) {
+      state.admin.imagesData = [];
       document.getElementById("product-image-preview").innerHTML = "Aperçu image";
       return;
     }
-    const reader = new FileReader();
-    reader.onload = () => {
-      state.admin.imageData = reader.result;
-      document.getElementById("product-image-preview").innerHTML = `<img src="${reader.result}" alt="Aperçu">`;
-    };
-    reader.readAsDataURL(file);
+    state.admin.imagesData = [];
+    const readers = files.map(
+      (file) =>
+        new Promise((resolve) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result);
+          reader.readAsDataURL(file);
+        })
+    );
+    Promise.all(readers).then((results) => {
+      state.admin.imagesData = results;
+      document.getElementById("product-image-preview").innerHTML = results
+        .map((src) => `<img src="${src}" alt="Aperçu" style="width:90px;height:90px;object-fit:cover;border-radius:10px;margin:4px">`)
+        .join("");
+    });
   });
 }
 
