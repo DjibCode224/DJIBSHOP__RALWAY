@@ -293,19 +293,27 @@ function openProductModal(productId) {
   if (!product) return;
   state.activeProductId = productId;
   const gallery = (product.images && product.images.length ? product.images : [product.image_url]).filter(Boolean);
-  const mainImage = gallery[0] || "";
-  const visual = mainImage
-    ? `<div class="product-detail-visual" id="detail-main-visual"><img src="${escapeHtml(mainImage)}" alt="${escapeHtml(product.name)}"></div>`
-    : `<div class="product-detail-visual" id="detail-main-visual"><div class="product-placeholder">🛋️</div></div>`;
-  const thumbs = gallery.length > 1
-    ? `<div class="gallery-thumbs">
-        ${gallery.map((url, i) => `<img src="${escapeHtml(url)}" class="gallery-thumb ${i === 0 ? "active" : ""}" data-src="${escapeHtml(url)}" alt="Photo ${i + 1}">`).join("")}
-      </div>`
+  const slides = gallery.length
+    ? gallery.map((url) => `<div class="carousel-slide"><img src="${escapeHtml(url)}" alt="${escapeHtml(product.name)}"></div>`).join("")
+    : `<div class="carousel-slide"><div class="product-placeholder">🛋️</div></div>`;
+  const arrows = gallery.length > 1
+    ? `<button class="carousel-arrow carousel-prev" id="carousel-prev" aria-label="Photo précédente">&#8249;</button>
+       <button class="carousel-arrow carousel-next" id="carousel-next" aria-label="Photo suivante">&#8250;</button>`
     : "";
+  const dots = gallery.length > 1
+    ? `<div class="carousel-dots">${gallery.map((_, i) => `<span class="carousel-dot ${i === 0 ? "active" : ""}" data-index="${i}"></span>`).join("")}</div>`
+    : "";
+  const visual = `
+    <div class="product-detail-visual carousel" id="detail-carousel">
+      <div class="carousel-track" id="carousel-track" style="width:${gallery.length * 100}%">
+        ${slides}
+      </div>
+      ${arrows}
+      ${dots}
+    </div>`;
   document.getElementById("product-detail").innerHTML = `
     ${visual}
     <div class="detail-copy">
-      ${thumbs}
       <div class="detail-header">
         <span class="badge">${escapeHtml(product.category)}</span>
         <span class="badge">${escapeHtml(stockClassName(product.stock_status))}</span>
@@ -327,18 +335,45 @@ function openProductModal(productId) {
       </div>
     </div>
   `;
-  document.querySelectorAll(".gallery-thumb").forEach((thumb) => {
-    thumb.addEventListener("click", () => {
-      document.querySelector("#detail-main-visual img").src = thumb.dataset.src;
-      document.querySelectorAll(".gallery-thumb").forEach((t) => t.classList.remove("active"));
-      thumb.classList.add("active");
-    });
-  });
+  if (gallery.length > 1) bindCarousel(gallery.length);
   document.getElementById("detail-order-btn").addEventListener("click", () => {
     closeProductModal();
     openOrderModal(product.id);
   });
   document.getElementById("product-modal").classList.remove("hidden");
+}
+
+function bindCarousel(slideCount) {
+  const track = document.getElementById("carousel-track");
+  let current = 0;
+
+  function goTo(index) {
+    current = (index + slideCount) % slideCount;
+    track.style.transform = `translateX(-${(current * 100) / slideCount}%)`;
+    document.querySelectorAll(".carousel-dot").forEach((dot, i) => dot.classList.toggle("active", i === current));
+  }
+
+  document.getElementById("carousel-prev")?.addEventListener("click", () => goTo(current - 1));
+  document.getElementById("carousel-next")?.addEventListener("click", () => goTo(current + 1));
+  document.querySelectorAll(".carousel-dot").forEach((dot) =>
+    dot.addEventListener("click", () => goTo(Number(dot.dataset.index)))
+  );
+
+  // Glissement tactile (swipe) horizontal
+  let startX = 0;
+  let isDragging = false;
+  const carousel = document.getElementById("detail-carousel");
+  carousel.addEventListener("touchstart", (e) => {
+    startX = e.touches[0].clientX;
+    isDragging = true;
+  });
+  carousel.addEventListener("touchend", (e) => {
+    if (!isDragging) return;
+    isDragging = false;
+    const deltaX = e.changedTouches[0].clientX - startX;
+    if (deltaX > 40) goTo(current - 1);
+    else if (deltaX < -40) goTo(current + 1);
+  });
 }
 
 function closeProductModal() {
