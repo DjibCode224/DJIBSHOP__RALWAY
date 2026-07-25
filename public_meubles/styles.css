@@ -639,6 +639,32 @@ th {
   color: var(--ink-soft);
 }
 
+.gallery-thumbs {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  margin-bottom: 14px;
+  padding-bottom: 4px;
+}
+
+.gallery-thumb {
+  width: 64px;
+  height: 64px;
+  object-fit: cover;
+  border-radius: 12px;
+  cursor: pointer;
+  border: 2px solid transparent;
+  opacity: 0.7;
+  flex-shrink: 0;
+  transition: 0.2s ease;
+}
+
+.gallery-thumb:hover { opacity: 1; }
+.gallery-thumb.active {
+  border-color: var(--blue);
+  opacity: 1;
+}
+
 @media (max-width: 900px) {
   .hero,
   .contact-layout { grid-template-columns: 1fr; }
