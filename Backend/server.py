@@ -204,6 +204,7 @@ def to_public_product(row) -> dict:
         "formatted_price": f"{row['price_gnf']:,}".replace(",", " ") + " GNF",
         "description": row["description"],
         "image_url": row["image_url"],
+        "images": json.loads(row["images"] or "[]"),
         "rating": row["rating"],
         "review_count": row["review_count"],
         "stock_status": row["stock_status"],
@@ -261,7 +262,7 @@ def _delete_upload(url: str, shop: str = "matelas") -> None:
     relative = url.lstrip("/")
     if shop == "meubles" and relative.startswith("meubles/"):
         relative = relative[len("meubles/"):]
-    path = base_dir/relative
+    path = base_dir / relative
     try:
         path.unlink(missing_ok=True)
     except OSError as exc:
@@ -294,6 +295,16 @@ def save_base64_image(image_data: str, filename_prefix: str, shop: str = "matela
     output_path.write_bytes(file_bytes)
     prefix = "/meubles/uploads" if shop == "meubles" else "/uploads"
     return f"{prefix}/{filename}"
+
+
+def save_multiple_images(images_data: list, filename_prefix: str, shop: str = "matelas") -> list:
+    """Sauvegarde plusieurs images base64 et retourne la liste des URLs (max 6)."""
+    urls = []
+    for img in (images_data or [])[:6]:
+        url = save_base64_image(img, filename_prefix, shop)
+        if url:
+            urls.append(url)
+    return urls
 
 
 def init_database() -> None:
@@ -374,6 +385,7 @@ def init_database() -> None:
     ensure_column(conn, "contacts", "status", "TEXT NOT NULL DEFAULT 'nouveau'")
     ensure_column(conn, "contacts", "updated_at", "TEXT NOT NULL DEFAULT ''")
     ensure_column(conn, "products", "shop", "TEXT NOT NULL DEFAULT 'matelas'")
+    ensure_column(conn, "products", "images", "TEXT NOT NULL DEFAULT '[]'")
     ensure_column(conn, "orders", "shop", "TEXT NOT NULL DEFAULT 'matelas'")
     ensure_column(conn, "contacts", "shop", "TEXT NOT NULL DEFAULT 'matelas'")
     conn.execute("UPDATE orders SET updated_at = created_at WHERE updated_at = '' OR updated_at IS NULL")
@@ -876,13 +888,20 @@ class DjibShopHandler(SimpleHTTPRequestHandler):
             raise ValueError("Le prix doit être numérique.") from exc
         if price <= 0:
             raise ValueError("Le prix doit être supérieur à zéro.")
+        # rating peut être du texte (ex: champ "Couleur" détourné côté Meubles)
+        try:
+            float(body.get("rating") or 0)
+        except (TypeError, ValueError):
+            body["rating"] = 0
         return price
 
     def create_product(self, shop="matelas"):
         try:
             body = self.parse_json_body()
             price = self.validate_product_payload(body)
-            image_url = save_base64_image(body.get("image_data", ""), "product", shop) if body.get("image_data") else ""
+            images_data = body.get("images_data") or ([body["image_data"]] if body.get("image_data") else [])
+            image_urls = save_multiple_images(images_data, "product", shop) if images_data else []
+            image_url = image_urls[0] if image_urls else ""
         except ValueError as exc:
             return json_response(self, {"error": str(exc)}, HTTPStatus.BAD_REQUEST)
 
@@ -891,9 +910,9 @@ class DjibShopHandler(SimpleHTTPRequestHandler):
             """
             INSERT INTO products (
                 shop, name, category, mattress_type, size_label, dimensions, price_gnf,
-                description, image_url, rating, review_count, stock_status, featured,
+                description, image_url, images, rating, review_count, stock_status, featured,
                 created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 shop,
@@ -905,6 +924,7 @@ class DjibShopHandler(SimpleHTTPRequestHandler):
                 price,
                 body["description"].strip(),
                 image_url,
+                json.dumps(image_urls),
                 float(body.get("rating") or 0),
                 int(body.get("review_count") or 0),
                 body["stock_status"].strip(),
@@ -933,21 +953,28 @@ class DjibShopHandler(SimpleHTTPRequestHandler):
             return json_response(self, {"error": "Produit introuvable."}, HTTPStatus.NOT_FOUND)
 
         image_url = existing["image_url"]
-        if body.get("image_data"):
+        images_json = existing["images"] or "[]"
+        images_data = body.get("images_data") or ([body["image_data"]] if body.get("image_data") else [])
+        if images_data:
             try:
-                new_image_url = save_base64_image(body["image_data"], "product", shop)
+                new_image_urls = save_multiple_images(images_data, "product", shop)
             except ValueError as exc:
                 conn.close()
                 return json_response(self, {"error": str(exc)}, HTTPStatus.BAD_REQUEST)
-            # Supprimer l'ancienne image pour éviter l'accumulation de fichiers orphelins
-            _delete_upload(existing["image_url"], shop)
-            image_url = new_image_url
+            # Supprimer toutes les anciennes images pour éviter l'accumulation de fichiers orphelins
+            for old_url in json.loads(images_json):
+                _delete_upload(old_url, shop)
+            if not new_image_urls:
+                conn.close()
+                return json_response(self, {"error": "Aucune image valide fournie."}, HTTPStatus.BAD_REQUEST)
+            image_url = new_image_urls[0]
+            images_json = json.dumps(new_image_urls)
 
         conn.execute(
             """
             UPDATE products
             SET name = ?, category = ?, mattress_type = ?, size_label = ?, dimensions = ?, price_gnf = ?,
-                description = ?, image_url = ?, rating = ?, review_count = ?, stock_status = ?, featured = ?, updated_at = ?
+                description = ?, image_url = ?, images = ?, rating = ?, review_count = ?, stock_status = ?, featured = ?, updated_at = ?
             WHERE id = ? AND shop = ?
             """,
             (
@@ -959,6 +986,7 @@ class DjibShopHandler(SimpleHTTPRequestHandler):
                 price,
                 body["description"].strip(),
                 image_url,
+                images_json,
                 float(body.get("rating") or 0),
                 int(body.get("review_count") or 0),
                 body["stock_status"].strip(),
@@ -1068,8 +1096,12 @@ class DjibShopHandler(SimpleHTTPRequestHandler):
         conn.execute("DELETE FROM products WHERE id = ? AND shop = ?", (product_id, shop))
         conn.commit()
         conn.close()
-        # Supprimer l'image associée
-        _delete_upload(existing["image_url"], shop)
+        # Supprimer toutes les images associées (galerie complète)
+        gallery_urls = json.loads(existing["images"] or "[]")
+        for url in gallery_urls:
+            _delete_upload(url, shop)
+        if existing["image_url"] and existing["image_url"] not in gallery_urls:
+            _delete_upload(existing["image_url"], shop)
         return json_response(self, {"success": True})
 
     def delete_order(self, order_id, shop="matelas"):
