@@ -27,8 +27,10 @@ logger = logging.getLogger("djibshop")
 ROOT_DIR = Path(__file__).resolve().parent.parent
 PUBLIC_DIR = ROOT_DIR / "public"
 PUBLIC_MEUBLES_DIR = ROOT_DIR / "public_meubles"
+PUBLIC_ELECTRIQUE_DIR = ROOT_DIR / "public_electrique"
 UPLOADS_DIR = PUBLIC_DIR / "uploads"
 UPLOADS_MEUBLES_DIR = PUBLIC_MEUBLES_DIR / "uploads"
+UPLOADS_ELECTRIQUE_DIR = PUBLIC_ELECTRIQUE_DIR / "uploads"
 DATABASE_DIR = ROOT_DIR / "database"
 DB_PATH = DATABASE_DIR / "djibshop.db"
 SESSION_COOKIE = "djibshop_session"
@@ -182,10 +184,11 @@ def ensure_site_settings(conn: sqlite3.Connection) -> None:
         """
     )
     ensure_column(conn, "site_settings", "home_background_url_meubles", "TEXT NOT NULL DEFAULT ''")
+    ensure_column(conn, "site_settings", "home_background_url_electrique", "TEXT NOT NULL DEFAULT ''")
     existing = conn.execute("SELECT id FROM site_settings WHERE id = 1").fetchone()
     if not existing:
         conn.execute(
-            "INSERT INTO site_settings (id, home_background_url, home_background_url_meubles, updated_at) VALUES (1, '', '', ?)",
+            "INSERT INTO site_settings (id, home_background_url, home_background_url_meubles, home_background_url_electrique, updated_at) VALUES (1, '', '', '', ?)",
             (now_iso(),),
         )
         conn.commit()
@@ -204,7 +207,6 @@ def to_public_product(row) -> dict:
         "formatted_price": f"{row['price_gnf']:,}".replace(",", " ") + " GNF",
         "description": row["description"],
         "image_url": row["image_url"],
-        "images": json.loads(row["images"] or "[]"),
         "rating": row["rating"],
         "review_count": row["review_count"],
         "stock_status": row["stock_status"],
@@ -254,15 +256,28 @@ def _detect_image_extension(file_bytes: bytes) -> str | None:
     return None
 
 
+def _public_dir_for_shop(shop: str) -> Path:
+    if shop == "meubles":
+        return PUBLIC_MEUBLES_DIR
+    if shop == "electrique":
+        return PUBLIC_ELECTRIQUE_DIR
+    return PUBLIC_DIR
+
+
+def _uploads_dir_for_shop(shop: str) -> Path:
+    if shop == "meubles":
+        return UPLOADS_MEUBLES_DIR
+    if shop == "electrique":
+        return UPLOADS_ELECTRIQUE_DIR
+    return UPLOADS_DIR
+
+
 def _delete_upload(url: str, shop: str = "matelas") -> None:
     """Supprime un fichier uploadé à partir de son URL relative (/uploads/...)."""
     if not url:
         return
-    base_dir = PUBLIC_MEUBLES_DIR if shop == "meubles" else PUBLIC_DIR
-    relative = url.lstrip("/")
-    if shop == "meubles" and relative.startswith("meubles/"):
-        relative = relative[len("meubles/"):]
-    path = base_dir / relative
+    base_dir = _public_dir_for_shop(shop)
+    path = base_dir / url.lstrip("/")
     try:
         path.unlink(missing_ok=True)
     except OSError as exc:
@@ -289,22 +304,11 @@ def save_base64_image(image_data: str, filename_prefix: str, shop: str = "matela
         raise ValueError("Type de fichier non autorisé. Formats acceptés : PNG, JPEG, WebP.")
 
     filename = f"{filename_prefix}-{int(time.time())}-{secrets.token_hex(4)}{extension}"
-    target_dir = UPLOADS_MEUBLES_DIR if shop == "meubles" else UPLOADS_DIR
+    target_dir = _uploads_dir_for_shop(shop)
     target_dir.mkdir(parents=True, exist_ok=True)
     output_path = target_dir / filename
     output_path.write_bytes(file_bytes)
-    prefix = "/meubles/uploads" if shop == "meubles" else "/uploads"
-    return f"{prefix}/{filename}"
-
-
-def save_multiple_images(images_data: list, filename_prefix: str, shop: str = "matelas") -> list:
-    """Sauvegarde plusieurs images base64 et retourne la liste des URLs (max 6)."""
-    urls = []
-    for img in (images_data or [])[:6]:
-        url = save_base64_image(img, filename_prefix, shop)
-        if url:
-            urls.append(url)
-    return urls
+    return f"/uploads/{filename}"
 
 
 def init_database() -> None:
@@ -313,6 +317,8 @@ def init_database() -> None:
     UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
     PUBLIC_MEUBLES_DIR.mkdir(parents=True, exist_ok=True)
     UPLOADS_MEUBLES_DIR.mkdir(parents=True, exist_ok=True)
+    PUBLIC_ELECTRIQUE_DIR.mkdir(parents=True, exist_ok=True)
+    UPLOADS_ELECTRIQUE_DIR.mkdir(parents=True, exist_ok=True)
 
     conn = db_connection()
     cur = conn.cursor()
@@ -385,7 +391,6 @@ def init_database() -> None:
     ensure_column(conn, "contacts", "status", "TEXT NOT NULL DEFAULT 'nouveau'")
     ensure_column(conn, "contacts", "updated_at", "TEXT NOT NULL DEFAULT ''")
     ensure_column(conn, "products", "shop", "TEXT NOT NULL DEFAULT 'matelas'")
-    ensure_column(conn, "products", "images", "TEXT NOT NULL DEFAULT '[]'")
     ensure_column(conn, "orders", "shop", "TEXT NOT NULL DEFAULT 'matelas'")
     ensure_column(conn, "contacts", "shop", "TEXT NOT NULL DEFAULT 'matelas'")
     conn.execute("UPDATE orders SET updated_at = created_at WHERE updated_at = '' OR updated_at IS NULL")
@@ -452,10 +457,12 @@ def init_database() -> None:
 
 
 def resolve_shop_and_path(path: str) -> tuple[str, str]:
-    """Détecte la boutique (matelas/meubles) à partir du chemin API et retourne
-    (shop, chemin_normalise) où chemin_normalise n'a plus le préfixe /meubles."""
+    """Détecte la boutique (matelas/meubles/electrique) à partir du chemin API et
+    retourne (shop, chemin_normalise) où chemin_normalise n'a plus le préfixe de boutique."""
     if path.startswith("/api/meubles/"):
         return "meubles", "/api/" + path[len("/api/meubles/"):]
+    if path.startswith("/api/electrique/"):
+        return "electrique", "/api/" + path[len("/api/electrique/"):]
     return "matelas", path
 
 
@@ -514,6 +521,14 @@ class DjibShopHandler(SimpleHTTPRequestHandler):
         if parsed.path.startswith("/meubles/"):
             self.directory = str(PUBLIC_MEUBLES_DIR)
             self.path = parsed.path[len("/meubles"):]
+            return SimpleHTTPRequestHandler.do_GET(self)
+        if parsed.path in ("/electrique", "/electrique/"):
+            self.directory = str(PUBLIC_ELECTRIQUE_DIR)
+            self.path = "/index.html"
+            return SimpleHTTPRequestHandler.do_GET(self)
+        if parsed.path.startswith("/electrique/"):
+            self.directory = str(PUBLIC_ELECTRIQUE_DIR)
+            self.path = parsed.path[len("/electrique"):]
             return SimpleHTTPRequestHandler.do_GET(self)
         self.directory = str(PUBLIC_DIR)
         if parsed.path in ("/", "/matelas", "/matelas/"):
@@ -671,7 +686,12 @@ class DjibShopHandler(SimpleHTTPRequestHandler):
     def public_site_info(self, shop="matelas"):
         conn = db_connection()
         ensure_site_settings(conn)
-        column = "home_background_url" if shop == "matelas" else "home_background_url_meubles"
+        column_map = {
+            "matelas": "home_background_url",
+            "meubles": "home_background_url_meubles",
+            "electrique": "home_background_url_electrique",
+        }
+        column = column_map.get(shop, "home_background_url")
         settings = conn.execute(f"SELECT {column} AS bg FROM site_settings WHERE id = 1").fetchone()
         conn.close()
         if shop == "meubles":
@@ -688,6 +708,22 @@ class DjibShopHandler(SimpleHTTPRequestHandler):
                 "about": {
                     "title": "À propos de DjibShop Meubles",
                     "body": "DjibShop Meubles vous propose des lits, armoires, coiffeuses et étagères neufs pour équiper votre maison en Guinée.",
+                },
+            }
+        elif shop == "electrique":
+            payload = {
+                "brand": "DjibShop",
+                "headline": "Électroménager de qualité livré partout en Guinée",
+                "subheadline": "Cuiseurs à riz, cafetières, réfrigérateurs, ventilateurs et plus, livrés avec accompagnement avant et après commande.",
+                "phone_primary": "+224 610 49 23 45",
+                "phone_secondary": "+224 620 74 47 03",
+                "whatsapp_number": "224610492345",
+                "city": "Conakry",
+                "delivery_area": "Partout en Guinée",
+                "home_background_url": settings["bg"] if settings else "",
+                "about": {
+                    "title": "À propos de DjibShop Électrique",
+                    "body": "DjibShop Électrique vous propose des appareils neufs (cuisine, froid, climat, linge) pour équiper votre maison en Guinée.",
                 },
             }
         else:
@@ -888,20 +924,13 @@ class DjibShopHandler(SimpleHTTPRequestHandler):
             raise ValueError("Le prix doit être numérique.") from exc
         if price <= 0:
             raise ValueError("Le prix doit être supérieur à zéro.")
-        # rating peut être du texte (ex: champ "Couleur" détourné côté Meubles)
-        try:
-            float(body.get("rating") or 0)
-        except (TypeError, ValueError):
-            body["rating"] = 0
         return price
 
     def create_product(self, shop="matelas"):
         try:
             body = self.parse_json_body()
             price = self.validate_product_payload(body)
-            images_data = body.get("images_data") or ([body["image_data"]] if body.get("image_data") else [])
-            image_urls = save_multiple_images(images_data, "product", shop) if images_data else []
-            image_url = image_urls[0] if image_urls else ""
+            image_url = save_base64_image(body.get("image_data", ""), "product", shop) if body.get("image_data") else ""
         except ValueError as exc:
             return json_response(self, {"error": str(exc)}, HTTPStatus.BAD_REQUEST)
 
@@ -910,9 +939,9 @@ class DjibShopHandler(SimpleHTTPRequestHandler):
             """
             INSERT INTO products (
                 shop, name, category, mattress_type, size_label, dimensions, price_gnf,
-                description, image_url, images, rating, review_count, stock_status, featured,
+                description, image_url, rating, review_count, stock_status, featured,
                 created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 shop,
@@ -924,7 +953,6 @@ class DjibShopHandler(SimpleHTTPRequestHandler):
                 price,
                 body["description"].strip(),
                 image_url,
-                json.dumps(image_urls),
                 float(body.get("rating") or 0),
                 int(body.get("review_count") or 0),
                 body["stock_status"].strip(),
@@ -953,28 +981,21 @@ class DjibShopHandler(SimpleHTTPRequestHandler):
             return json_response(self, {"error": "Produit introuvable."}, HTTPStatus.NOT_FOUND)
 
         image_url = existing["image_url"]
-        images_json = existing["images"] or "[]"
-        images_data = body.get("images_data") or ([body["image_data"]] if body.get("image_data") else [])
-        if images_data:
+        if body.get("image_data"):
             try:
-                new_image_urls = save_multiple_images(images_data, "product", shop)
+                new_image_url = save_base64_image(body["image_data"], "product", shop)
             except ValueError as exc:
                 conn.close()
                 return json_response(self, {"error": str(exc)}, HTTPStatus.BAD_REQUEST)
-            # Supprimer toutes les anciennes images pour éviter l'accumulation de fichiers orphelins
-            for old_url in json.loads(images_json):
-                _delete_upload(old_url, shop)
-            if not new_image_urls:
-                conn.close()
-                return json_response(self, {"error": "Aucune image valide fournie."}, HTTPStatus.BAD_REQUEST)
-            image_url = new_image_urls[0]
-            images_json = json.dumps(new_image_urls)
+            # Supprimer l'ancienne image pour éviter l'accumulation de fichiers orphelins
+            _delete_upload(existing["image_url"], shop)
+            image_url = new_image_url
 
         conn.execute(
             """
             UPDATE products
             SET name = ?, category = ?, mattress_type = ?, size_label = ?, dimensions = ?, price_gnf = ?,
-                description = ?, image_url = ?, images = ?, rating = ?, review_count = ?, stock_status = ?, featured = ?, updated_at = ?
+                description = ?, image_url = ?, rating = ?, review_count = ?, stock_status = ?, featured = ?, updated_at = ?
             WHERE id = ? AND shop = ?
             """,
             (
@@ -986,7 +1007,6 @@ class DjibShopHandler(SimpleHTTPRequestHandler):
                 price,
                 body["description"].strip(),
                 image_url,
-                images_json,
                 float(body.get("rating") or 0),
                 int(body.get("review_count") or 0),
                 body["stock_status"].strip(),
@@ -1096,12 +1116,8 @@ class DjibShopHandler(SimpleHTTPRequestHandler):
         conn.execute("DELETE FROM products WHERE id = ? AND shop = ?", (product_id, shop))
         conn.commit()
         conn.close()
-        # Supprimer toutes les images associées (galerie complète)
-        gallery_urls = json.loads(existing["images"] or "[]")
-        for url in gallery_urls:
-            _delete_upload(url, shop)
-        if existing["image_url"] and existing["image_url"] not in gallery_urls:
-            _delete_upload(existing["image_url"], shop)
+        # Supprimer l'image associée
+        _delete_upload(existing["image_url"], shop)
         return json_response(self, {"success": True})
 
     def delete_order(self, order_id, shop="matelas"):
