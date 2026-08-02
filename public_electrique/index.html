@@ -29,6 +29,7 @@
       <button class="nav-link" data-page="contact">Contact</button>
       <button class="nav-link" data-page="about">À propos</button>
       <button class="nav-link nav-admin" data-page="admin">+</button>
+      <button class="nav-link cart-btn" id="cart-btn">🛒 Panier <span class="cart-badge" id="cart-badge">0</span></button>
       <div class="shop-switcher">
         <button class="shop-switcher-btn" id="shop-switcher-btn">🛍️ Boutiques ▾</button>
         <div class="shop-switcher-menu hidden" id="shop-switcher-menu">
@@ -252,7 +253,9 @@
                 <thead>
                   <tr>
                     <th>Client</th>
-                    <th>Produit</th>
+                    <th>Articles</th>
+                    <th>Total</th>
+                    <th>Mode</th>
                     <th>Ville</th>
                     <th>Paiement</th>
                     <th>Statut</th>
@@ -327,6 +330,11 @@
                   <span>Mettre en vedette</span>
                   <input type="checkbox" name="featured">
                 </label>
+                <label class="field">
+                  <span>Lieu de retrait (si "Retrait sur place")</span>
+                  <input type="text" name="pickup_location" list="pickup-location-list" placeholder="ex: Hamdallaye Pharmacie">
+                  <datalist id="pickup-location-list"></datalist>
+                </label>
               </div>
               <label class="field">
                 <span>Description</span>
@@ -366,14 +374,13 @@
     <div class="modal-card">
       <button class="modal-close" id="close-order-modal" aria-label="Fermer">&times;</button>
       <h3>Passer commande</h3>
-      <p class="muted" id="order-product-summary"></p>
       <div class="order-reassurance">
         <span>Confirmation rapide</span>
         <span>Livraison organisée</span>
         <span>Suivi par téléphone</span>
       </div>
+      <div id="order-cart-summary" class="cart-order-summary"></div>
       <form id="order-form">
-        <input type="hidden" name="product_id">
         <div class="form-grid">
           <label class="field">
             <span>Nom complet</span>
@@ -385,19 +392,20 @@
           </label>
         </div>
         <label class="field">
+          <span>Mode de livraison</span>
+          <select name="delivery_mode" id="delivery-mode" required>
+            <option value="Livraison">Livraison à domicile</option>
+            <option value="Retrait sur place">Retrait sur place</option>
+          </select>
+        </label>
+        <p class="muted hidden" id="pickup-note">Pas besoin d'adresse : nous vous contacterons pour convenir du lieu et de l'heure de retrait.</p>
+        <label class="field" id="address-field">
           <span>Adresse</span>
           <input type="text" name="address" required>
         </label>
         <label class="field">
           <span>Ville / Quartier</span>
           <input type="text" name="city" required>
-        </label>
-        <label class="field">
-          <span>Mode de livraison</span>
-          <select name="delivery_mode" id="delivery-mode" required>
-            <option value="Livraison">Livraison à domicile</option>
-            <option value="Retrait sur place">Retrait sur place</option>
-          </select>
         </label>
         <label class="field" id="delivery-location-field">
           <span>Indication du lieu de livraison</span>
@@ -412,6 +420,22 @@
         </label>
         <button class="btn btn-primary" type="submit">Confirmer la commande</button>
       </form>
+    </div>
+  </div>
+
+  <div class="modal hidden" id="cart-modal">
+    <div class="modal-card">
+      <button class="modal-close" id="close-cart-modal" aria-label="Fermer">&times;</button>
+      <h3>Votre panier</h3>
+      <div id="cart-items-list"></div>
+      <div class="cart-total-row">
+        <strong>Total</strong>
+        <span id="cart-total-amount">0 GNF</span>
+      </div>
+      <div class="button-row">
+        <button class="btn btn-secondary" id="cart-clear-btn">Vider le panier</button>
+        <button class="btn btn-primary" id="cart-checkout-btn">Passer la commande</button>
+      </div>
     </div>
   </div>
 
