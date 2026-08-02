@@ -1,6 +1,9 @@
+const CART_STORAGE_KEY = "djibshop_cart_meubles";
+
 const state = {
   site: null,
   products: [],
+  cart: [],
   homeFilter: "all",
   catalogFilter: "all",
   catalogSearch: "",
@@ -13,7 +16,6 @@ const state = {
     orders: [],
     contacts: [],
     imageData: "",
-    imagesData: [],
     homeImageData: "",
     ordersSort: "created-desc",
     contactsSort: "created-desc",
@@ -175,6 +177,7 @@ function productCard(product) {
           <div class="price">${escapeHtml(product.formatted_price)}</div>
           <div class="button-row">
             <button class="btn-linkish detail-btn" data-product-id="${product.id}">Voir détails</button>
+            <button class="btn btn-secondary cart-add-btn" data-product-id="${product.id}">+ Panier</button>
             <button class="btn btn-primary order-btn" data-product-id="${product.id}">Commander</button>
           </div>
         </div>
@@ -198,7 +201,16 @@ function renderProducts() {
   if (countEl) countEl.textContent = `${catalogProducts.length} produit${catalogProducts.length > 1 ? "s" : ""}`;
 
   document.querySelectorAll(".order-btn").forEach((btn) =>
-    btn.addEventListener("click", () => openOrderModal(Number(btn.dataset.productId)))
+    btn.addEventListener("click", () => {
+      addToCart(Number(btn.dataset.productId), 1);
+      openOrderModal();
+    })
+  );
+  document.querySelectorAll(".cart-add-btn").forEach((btn) =>
+    btn.addEventListener("click", () => {
+      addToCart(Number(btn.dataset.productId), 1);
+      showToast("Ajouté au panier.");
+    })
   );
   document.querySelectorAll(".detail-btn").forEach((btn) =>
     btn.addEventListener("click", () => openProductModal(Number(btn.dataset.productId)))
@@ -282,6 +294,196 @@ function getProductById(productId) {
   return state.products.find((item) => item.id === productId);
 }
 
+function loadCart() {
+  try {
+    const raw = localStorage.getItem(CART_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch (error) {
+    return [];
+  }
+}
+
+function saveCart() {
+  try {
+    localStorage.setItem(CART_STORAGE_KEY, JSON.stringify(state.cart));
+  } catch (error) {
+    // Stockage indisponible : le panier reste actif pour cette session seulement.
+  }
+}
+
+function formatGnf(amount) {
+  return `${Math.round(amount).toLocaleString("fr-FR").replace(/,/g, " ")} GNF`;
+}
+
+function cartFindIndex(productId) {
+  return state.cart.findIndex((item) => item.product_id === productId);
+}
+
+function addToCart(productId, quantity = 1) {
+  const product = getProductById(productId);
+  if (!product) return;
+  const index = cartFindIndex(productId);
+  if (index >= 0) {
+    state.cart[index].quantity += quantity;
+  } else {
+    state.cart.push({
+      product_id: product.id,
+      name: product.name,
+      price_gnf: product.price_gnf,
+      formatted_price: product.formatted_price,
+      image_url: product.image_url,
+      pickup_location: product.pickup_location || "",
+      quantity,
+    });
+  }
+  saveCart();
+  renderCartBadge();
+}
+
+function updateCartQuantity(productId, quantity) {
+  const index = cartFindIndex(productId);
+  if (index < 0) return;
+  if (quantity <= 0) {
+    state.cart.splice(index, 1);
+  } else {
+    state.cart[index].quantity = quantity;
+  }
+  saveCart();
+  renderCartBadge();
+  renderCartModal();
+}
+
+function removeFromCart(productId) {
+  const index = cartFindIndex(productId);
+  if (index < 0) return;
+  state.cart.splice(index, 1);
+  saveCart();
+  renderCartBadge();
+  renderCartModal();
+}
+
+function clearCart() {
+  state.cart = [];
+  saveCart();
+  renderCartBadge();
+  renderCartModal();
+}
+
+function cartTotal() {
+  return state.cart.reduce((sum, item) => sum + item.price_gnf * item.quantity, 0);
+}
+
+function cartCount() {
+  return state.cart.reduce((sum, item) => sum + item.quantity, 0);
+}
+
+function renderCartBadge() {
+  const badge = document.getElementById("cart-badge");
+  if (badge) badge.textContent = String(cartCount());
+}
+
+function renderCartModal() {
+  const list = document.getElementById("cart-items-list");
+  const totalEl = document.getElementById("cart-total-amount");
+  if (!list || !totalEl) return;
+  if (state.cart.length === 0) {
+    list.innerHTML = `<p class="muted">Votre panier est vide.</p>`;
+  } else {
+    list.innerHTML = state.cart
+      .map(
+        (item) => `
+      <div class="cart-item">
+        <div class="cart-item-info">
+          <strong>${escapeHtml(item.name)}</strong>
+          <span class="muted">${escapeHtml(item.formatted_price)} × ${item.quantity}</span>
+        </div>
+        <div class="cart-item-controls">
+          <button class="cart-qty-btn" data-action="decrease" data-product-id="${item.product_id}">−</button>
+          <span>${item.quantity}</span>
+          <button class="cart-qty-btn" data-action="increase" data-product-id="${item.product_id}">+</button>
+          <button class="cart-remove-btn" data-product-id="${item.product_id}">🗑️</button>
+        </div>
+      </div>
+    `
+      )
+      .join("");
+  }
+  totalEl.textContent = formatGnf(cartTotal());
+
+  list.querySelectorAll(".cart-qty-btn").forEach((btn) =>
+    btn.addEventListener("click", () => {
+      const productId = Number(btn.dataset.productId);
+      const index = cartFindIndex(productId);
+      if (index < 0) return;
+      const delta = btn.dataset.action === "increase" ? 1 : -1;
+      updateCartQuantity(productId, state.cart[index].quantity + delta);
+    })
+  );
+  list.querySelectorAll(".cart-remove-btn").forEach((btn) =>
+    btn.addEventListener("click", () => removeFromCart(Number(btn.dataset.productId)))
+  );
+}
+
+function openCartModal() {
+  renderCartModal();
+  document.getElementById("cart-modal").classList.remove("hidden");
+}
+
+function closeCartModal() {
+  document.getElementById("cart-modal").classList.add("hidden");
+}
+
+function renderOrderCartSummary() {
+  const el = document.getElementById("order-cart-summary");
+  if (!el) return;
+  if (state.cart.length === 0) {
+    el.innerHTML = `<p class="muted">Votre panier est vide.</p>`;
+    return;
+  }
+  const lines = state.cart
+    .map((item) => `<li>${escapeHtml(item.name)} × ${item.quantity} — ${escapeHtml(item.formatted_price)}</li>`)
+    .join("");
+  let html = `<ul class="bullet-list">${lines}</ul><p><strong>Total : ${formatGnf(cartTotal())}</strong></p>`;
+
+  const deliverySelect = document.getElementById("delivery-mode");
+  const isPickup = deliverySelect && deliverySelect.value === "Retrait sur place";
+  if (isPickup) {
+    const groups = {};
+    state.cart.forEach((item) => {
+      const loc = item.pickup_location && item.pickup_location.trim()
+        ? item.pickup_location.trim()
+        : "Lieu à confirmer par téléphone";
+      if (!groups[loc]) groups[loc] = [];
+      groups[loc].push(item);
+    });
+    const locationKeys = Object.keys(groups);
+    const groupLines = locationKeys
+      .map((loc) => {
+        const itemsText = groups[loc].map((item) => `${escapeHtml(item.name)} × ${item.quantity}`).join(", ");
+        return `<li>📍 <strong>${escapeHtml(loc)}</strong> : ${itemsText}</li>`;
+      })
+      .join("");
+    const warning = locationKeys.length > 1
+      ? `<p class="detail-note">⚠️ Vos articles sont à récupérer à ${locationKeys.length} endroits différents.</p>`
+      : "";
+    html += `<div class="pickup-locations"><strong>Lieu(x) de retrait :</strong><ul class="bullet-list">${groupLines}</ul></div>${warning}`;
+  }
+
+  el.innerHTML = html;
+}
+
+function updateDeliveryModeUI() {
+  const select = document.getElementById("delivery-mode");
+  const addressField = document.getElementById("address-field");
+  const pickupNote = document.getElementById("pickup-note");
+  if (!select) return;
+  const isPickup = select.value === "Retrait sur place";
+  const addressInput = addressField ? addressField.querySelector("input") : null;
+  if (addressField) addressField.classList.toggle("hidden", isPickup);
+  if (addressInput) addressInput.required = !isPickup;
+  if (pickupNote) pickupNote.classList.toggle("hidden", !isPickup);
+}
+
 function productWhatsappUrl(product) {
   const phone = state.site?.whatsapp_number || "224610492345";
   const message = encodeURIComponent(`Bonjour, je veux des détails sur ${product.name} (${product.formatted_price}).`);
@@ -292,25 +494,9 @@ function openProductModal(productId) {
   const product = getProductById(productId);
   if (!product) return;
   state.activeProductId = productId;
-  const gallery = (product.images && product.images.length ? product.images : [product.image_url]).filter(Boolean);
-  const slides = gallery.length
-    ? gallery.map((url) => `<div class="carousel-slide"><img src="${escapeHtml(url)}" alt="${escapeHtml(product.name)}"></div>`).join("")
-    : `<div class="carousel-slide"><div class="product-placeholder">🛋️</div></div>`;
-  const arrows = gallery.length > 1
-    ? `<button class="carousel-arrow carousel-prev" id="carousel-prev" aria-label="Photo précédente">&#8249;</button>
-       <button class="carousel-arrow carousel-next" id="carousel-next" aria-label="Photo suivante">&#8250;</button>`
-    : "";
-  const dots = gallery.length > 1
-    ? `<div class="carousel-dots">${gallery.map((_, i) => `<span class="carousel-dot ${i === 0 ? "active" : ""}" data-index="${i}"></span>`).join("")}</div>`
-    : "";
-  const visual = `
-    <div class="product-detail-visual carousel" id="detail-carousel">
-      <div class="carousel-track" id="carousel-track" style="width:${gallery.length * 100}%">
-        ${slides}
-      </div>
-      ${arrows}
-      ${dots}
-    </div>`;
+  const visual = product.image_url
+    ? `<div class="product-detail-visual"><img src="${escapeHtml(product.image_url)}" alt="${escapeHtml(product.name)}"></div>`
+    : `<div class="product-detail-visual"><div class="product-placeholder">🛏️</div></div>`;
   document.getElementById("product-detail").innerHTML = `
     ${visual}
     <div class="detail-copy">
@@ -330,63 +516,35 @@ function openProductModal(productId) {
       <p>${escapeHtml(product.description)}</p>
       <div class="detail-note">Ce produit peut être réservé rapidement depuis WhatsApp ou commandé ici.</div>
       <div class="detail-cta-row">
+        <button class="btn btn-secondary" id="detail-cart-btn">+ Panier</button>
         <button class="btn btn-primary" id="detail-order-btn">Commander maintenant</button>
         <a class="btn btn-secondary" href="${productWhatsappUrl(product)}" target="_blank" rel="noopener noreferrer">WhatsApp</a>
       </div>
     </div>
   `;
-  if (gallery.length > 1) bindCarousel(gallery.length);
+  document.getElementById("detail-cart-btn").addEventListener("click", () => {
+    addToCart(product.id, 1);
+    showToast("Ajouté au panier.");
+  });
   document.getElementById("detail-order-btn").addEventListener("click", () => {
+    addToCart(product.id, 1);
     closeProductModal();
-    openOrderModal(product.id);
+    openOrderModal();
   });
   document.getElementById("product-modal").classList.remove("hidden");
-}
-
-function bindCarousel(slideCount) {
-  const track = document.getElementById("carousel-track");
-  let current = 0;
-
-  function goTo(index) {
-    current = (index + slideCount) % slideCount;
-    track.style.transform = `translateX(-${(current * 100) / slideCount}%)`;
-    document.querySelectorAll(".carousel-dot").forEach((dot, i) => dot.classList.toggle("active", i === current));
-  }
-
-  document.getElementById("carousel-prev")?.addEventListener("click", () => goTo(current - 1));
-  document.getElementById("carousel-next")?.addEventListener("click", () => goTo(current + 1));
-  document.querySelectorAll(".carousel-dot").forEach((dot) =>
-    dot.addEventListener("click", () => goTo(Number(dot.dataset.index)))
-  );
-
-  // Glissement tactile (swipe) horizontal
-  let startX = 0;
-  let isDragging = false;
-  const carousel = document.getElementById("detail-carousel");
-  carousel.addEventListener("touchstart", (e) => {
-    startX = e.touches[0].clientX;
-    isDragging = true;
-  });
-  carousel.addEventListener("touchend", (e) => {
-    if (!isDragging) return;
-    isDragging = false;
-    const deltaX = e.changedTouches[0].clientX - startX;
-    if (deltaX > 40) goTo(current - 1);
-    else if (deltaX < -40) goTo(current + 1);
-  });
 }
 
 function closeProductModal() {
   document.getElementById("product-modal").classList.add("hidden");
 }
 
-function openOrderModal(productId) {
-  const product = getProductById(productId);
-  if (!product) return;
-  state.activeProductId = productId;
-  document.querySelector('#order-form [name="product_id"]').value = product.id;
-  document.getElementById("order-product-summary").textContent =
-    `${product.name} — ${product.formatted_price} — ${product.dimensions} — ${stockClassName(product.stock_status)}`;
+function openOrderModal() {
+  if (state.cart.length === 0) {
+    showToast("Votre panier est vide. Ajoutez un produit avant de commander.", true);
+    return;
+  }
+  renderOrderCartSummary();
+  updateDeliveryModeUI();
   document.getElementById("order-modal").classList.remove("hidden");
 }
 
@@ -398,11 +556,13 @@ async function submitOrder(event) {
   event.preventDefault();
   const form = event.currentTarget;
   const payload = Object.fromEntries(new FormData(form).entries());
-  payload.product_id = Number(payload.product_id);
+  delete payload.product_id;
+  payload.items = state.cart.map((item) => ({ product_id: item.product_id, quantity: item.quantity }));
   try {
     const result = await apiFetch("/api/public/orders", { method: "POST", body: JSON.stringify(payload) });
-    showToast(result.message || `Commande enregistrée. Référence #${result.order_id}`);
+    showToast(result.message || `Commande enregistrée. Référence #${result.order_id} — ${result.formatted_total || ""}`);
     form.reset();
+    clearCart();
     closeOrderModal();
     await refreshAdminDataIfOpen();
   } catch (error) {
@@ -454,7 +614,15 @@ function renderMetrics() {
     .join("");
 }
 
+function renderPickupLocationSuggestions() {
+  const datalist = document.getElementById("pickup-location-list");
+  if (!datalist) return;
+  const locations = [...new Set(state.admin.products.map((p) => (p.pickup_location || "").trim()).filter(Boolean))];
+  datalist.innerHTML = locations.map((loc) => `<option value="${escapeHtml(loc)}"></option>`).join("");
+}
+
 function renderAdminProducts() {
+  renderPickupLocationSuggestions();
   document.getElementById("admin-products-table").innerHTML =
     state.admin.products
       .map((product) => `
@@ -492,10 +660,21 @@ function renderAdminOrders() {
   ];
   document.getElementById("admin-orders-table").innerHTML =
     state.admin.orders
-      .map((order) => `
+      .map((order) => {
+        const itemsList = (order.items || [])
+          .map((item) => {
+            const loc = order.delivery_mode === "Retrait sur place" && item.pickup_location
+              ? ` <span class="muted">(${escapeHtml(item.pickup_location)})</span>`
+              : "";
+            return `${escapeHtml(item.product_name)} × ${item.quantity}${loc}`;
+          })
+          .join("<br>");
+        return `
     <tr>
       <td><strong>${escapeHtml(order.customer_name)}</strong><br><span class="muted">${escapeHtml(order.phone)}</span></td>
-      <td>${escapeHtml(order.product_name)}</td>
+      <td>${itemsList || escapeHtml(order.product_name)}</td>
+      <td><strong>${escapeHtml(order.formatted_total || "")}</strong></td>
+      <td>${order.delivery_mode === "Retrait sur place" ? "🏬 Retrait" : "🚚 Livraison"}</td>
       <td>${escapeHtml(order.city)}</td>
       <td>${escapeHtml(order.payment_method)}</td>
       <td>
@@ -506,8 +685,9 @@ function renderAdminOrders() {
       <td>${escapeHtml(formatDate(order.created_at))}</td>
       <td><button class="btn btn-secondary delete-order-btn" data-order-id="${order.id}">🗑️</button></td>
     </tr>
-  `)
-      .join("") || `<tr><td colspan="7">Aucune commande.</td></tr>`;
+  `;
+      })
+      .join("") || `<tr><td colspan="9">Aucune commande.</td></tr>`;
 
   document.querySelectorAll(".delete-order-btn").forEach((btn) =>
     btn.addEventListener("click", async () => {
@@ -611,12 +791,12 @@ function switchAdminTab(tab) {
 
 function resetProductForm() {
   state.admin.imageData = "";
-  state.admin.imagesData = [];
   const form = document.getElementById("product-form");
   form.reset();
   form.querySelector('[name="id"]').value = "";
   form.querySelector('[name="rating"]').value = "0";
   form.querySelector('[name="review_count"]').value = "0";
+  form.querySelector('[name="pickup_location"]').value = "";
   document.getElementById("product-form-title").textContent = "Ajouter un produit";
   document.getElementById("product-image-preview").innerHTML = "Aperçu image";
 }
@@ -624,8 +804,6 @@ function resetProductForm() {
 function populateProductForm(productId) {
   const product = state.admin.products.find((item) => item.id === productId);
   if (!product) return;
-  state.admin.imagesData = [];
-  state.admin.imageData = "";
   const form = document.getElementById("product-form");
   form.querySelector('[name="id"]').value = String(product.id);
   form.querySelector('[name="name"]').value = product.name;
@@ -638,11 +816,11 @@ function populateProductForm(productId) {
   form.querySelector('[name="review_count"]').value = product.review_count;
   form.querySelector('[name="stock_status"]').value = product.stock_status;
   form.querySelector('[name="featured"]').checked = product.featured;
+  form.querySelector('[name="pickup_location"]').value = product.pickup_location || "";
   form.querySelector('[name="description"]').value = product.description;
   document.getElementById("product-form-title").textContent = "Modifier un produit";
-  const existingImages = product.images && product.images.length ? product.images : (product.image_url ? [product.image_url] : []);
-  document.getElementById("product-image-preview").innerHTML = existingImages.length
-    ? existingImages.map((src) => `<img src="${escapeHtml(src)}" alt="${escapeHtml(product.name)}" style="width:90px;height:90px;object-fit:cover;border-radius:10px;margin:4px">`).join("")
+  document.getElementById("product-image-preview").innerHTML = product.image_url
+    ? `<img src="${escapeHtml(product.image_url)}" alt="${escapeHtml(product.name)}">`
     : "Aucune image";
   switchAdminTab("editor");
 }
@@ -673,9 +851,9 @@ async function submitProductForm(event) {
     review_count: form.querySelector('[name="review_count"]').value.trim() || 0,
     stock_status: form.querySelector('[name="stock_status"]').value,
     featured: form.querySelector('[name="featured"]').checked,
+    pickup_location: form.querySelector('[name="pickup_location"]').value.trim(),
     description: form.querySelector('[name="description"]').value.trim(),
-    image_data: state.admin.imagesData[0] || "",
-    images_data: state.admin.imagesData,
+    image_data: state.admin.imageData,
   };
   const isEdit = Boolean(payload.id);
   try {
@@ -696,27 +874,18 @@ function bindImageInput() {
   const input = document.querySelector('#product-form [name="image_file"]');
   if (!input) return;
   input.addEventListener("change", (event) => {
-    const files = Array.from(event.target.files || []).slice(0, 6);
-    if (!files.length) {
-      state.admin.imagesData = [];
+    const file = event.target.files?.[0];
+    if (!file) {
+      state.admin.imageData = "";
       document.getElementById("product-image-preview").innerHTML = "Aperçu image";
       return;
     }
-    state.admin.imagesData = [];
-    const readers = files.map(
-      (file) =>
-        new Promise((resolve) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve(reader.result);
-          reader.readAsDataURL(file);
-        })
-    );
-    Promise.all(readers).then((results) => {
-      state.admin.imagesData = results;
-      document.getElementById("product-image-preview").innerHTML = results
-        .map((src) => `<img src="${src}" alt="Aperçu" style="width:90px;height:90px;object-fit:cover;border-radius:10px;margin:4px">`)
-        .join("");
-    });
+    const reader = new FileReader();
+    reader.onload = () => {
+      state.admin.imageData = reader.result;
+      document.getElementById("product-image-preview").innerHTML = `<img src="${reader.result}" alt="Aperçu">`;
+    };
+    reader.readAsDataURL(file);
   });
 }
 
@@ -818,9 +987,19 @@ function bindEvents() {
   // Modaux
   document.getElementById("close-order-modal").addEventListener("click", closeOrderModal);
   document.getElementById("close-product-modal").addEventListener("click", closeProductModal);
+  document.getElementById("close-cart-modal").addEventListener("click", closeCartModal);
   document.getElementById("order-modal").addEventListener("click", (e) => { if (e.target.id === "order-modal") closeOrderModal(); });
   document.getElementById("product-modal").addEventListener("click", (e) => { if (e.target.id === "product-modal") closeProductModal(); });
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape") { closeOrderModal(); closeProductModal(); } });
+  document.getElementById("cart-modal").addEventListener("click", (e) => { if (e.target.id === "cart-modal") closeCartModal(); });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") { closeOrderModal(); closeProductModal(); closeCartModal(); } });
+  document.getElementById("cart-btn").addEventListener("click", openCartModal);
+  const deliveryModeSelect = document.getElementById("delivery-mode");
+  if (deliveryModeSelect) deliveryModeSelect.addEventListener("change", () => {
+    updateDeliveryModeUI();
+    renderOrderCartSummary();
+  });
+  document.getElementById("cart-clear-btn").addEventListener("click", () => { if (confirm("Vider le panier ?")) clearCart(); });
+  document.getElementById("cart-checkout-btn").addEventListener("click", () => { closeCartModal(); openOrderModal(); });
 
   // Formulaires
   document.getElementById("order-form").addEventListener("submit", submitOrder);
@@ -843,7 +1022,9 @@ function bindEvents() {
 }
 
 async function init() {
+  state.cart = loadCart();
   bindEvents();
+  renderCartBadge();
   await loadPublicData();
   await loadAdminData({ silent: true });
 }
