@@ -477,16 +477,27 @@ th {
   color: var(--ink-soft);
   overflow: hidden;
   margin-bottom: 14px;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px;
 }
 
 .preview-box img {
-  width: 100%;
-  height: 220px;
+  width: 90px;
+  height: 90px;
   object-fit: cover;
+  border-radius: 10px;
 }
 
 #home-background-preview span {
   text-align: center;
+}
+
+#home-background-preview img {
+  width: 100%;
+  height: 220px;
+  object-fit: cover;
+  border-radius: 10px;
 }
 
 .admin-tab { display: none; }
@@ -672,48 +683,6 @@ th {
 .shop-switcher { position: relative; }
 
 .shop-switcher-btn {
-  background: var(--gold-soft) !important;
-  color: var(--gold) !important;
-  border: 1px solid var(--gold) !important;
-  font-weight: 700;
-}
-
-.shop-switcher-btn:hover {
-  background: var(--gold) !important;
-  color: #fff !important;
-}
-
-.shop-switcher-menu {
-  position: absolute;
-  top: calc(100% + 8px);
-  right: 0;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  box-shadow: var(--shadow);
-  min-width: 180px;
-  z-index: 50;
-  overflow: hidden;
-}
-
-.shop-switcher-item {
-  display: block;
-  padding: 14px 18px;
-  text-decoration: none;
-  color: var(--ink);
-  font-weight: 600;
-  transition: 0.2s ease;
-  border-bottom: 1px solid var(--line);
-}
-
-.shop-switcher-item:last-child { border-bottom: 0; }
-.shop-switcher-item:hover { background: #edf4fa; color: var(--blue-dark); }
-.shop-switcher-item.active-shop { background: var(--gold-soft); color: var(--gold); }
-
-/* ===== SHOP SWITCHER ===== */
-.shop-switcher { position: relative; }
-
-.shop-switcher-btn {
   border: 1px solid var(--gold);
   background: var(--gold-soft);
   color: var(--gold);
@@ -834,3 +803,53 @@ th {
   border-top: 2px solid var(--line);
   font-size: 18px;
 }
+
+/* ===== GALERIE PHOTOS / DIAPORAMA AUTOMATIQUE ===== */
+.gallery-slider {
+  position: relative;
+  overflow: hidden;
+}
+
+.gallery-slider .slide {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  transition: opacity 0.7s ease;
+}
+
+.gallery-slider .slide.active {
+  opacity: 1;
+  position: relative;
+}
+
+.gallery-slider .slide img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.gallery-dots {
+  position: absolute;
+  bottom: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 6px;
+  z-index: 2;
+}
+
+.gallery-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.6);
+  cursor: pointer;
+  border: 0;
+  padding: 0;
+}
+
+.gallery-dot.active { background: #fff; }
+
+.product-detail-visual.gallery-slider { min-height: 300px; }
+.product-detail-visual.gallery-slider .slide { min-height: 300px; }
