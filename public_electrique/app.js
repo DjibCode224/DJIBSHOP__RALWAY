@@ -15,7 +15,7 @@ const state = {
     products: [],
     orders: [],
     contacts: [],
-    imageData: "",
+    imagesData: [],
     homeImageData: "",
     ordersSort: "created-desc",
     contactsSort: "created-desc",
@@ -30,6 +30,9 @@ const productFilters = [
   { key: "linge", label: "Linge" },
   { key: "autre", label: "Autre" },
 ];
+
+const PRODUCT_PLACEHOLDER = "🔌";
+const GALLERY_TICK_MS = 3000;
 
 async function apiFetch(url, options = {}) {
   if (url.startsWith("/api/")) {
@@ -152,10 +155,63 @@ function renderFilterRow(containerId, activeFilter, handler) {
   });
 }
 
+/**
+ * Construit le HTML d'une zone image : une simple image si le produit n'en a
+ * qu'une, ou une galerie qui défile automatiquement (diaporama) s'il y en a
+ * plusieurs (jusqu'à 6). wrapperClass ex: "product-image" ou "product-detail-visual".
+ */
+function buildGalleryMarkup(images, wrapperClass) {
+  const list = (images || []).filter(Boolean);
+  if (list.length === 0) {
+    return `<div class="${wrapperClass}"><div class="product-placeholder">${PRODUCT_PLACEHOLDER}</div></div>`;
+  }
+  if (list.length === 1) {
+    return `<div class="${wrapperClass}"><img src="${escapeHtml(list[0])}" alt=""></div>`;
+  }
+  const slides = list
+    .map((url, i) => `<div class="slide ${i === 0 ? "active" : ""}"><img src="${escapeHtml(url)}" alt=""></div>`)
+    .join("");
+  const dots = list
+    .map((_, i) => `<button type="button" class="gallery-dot ${i === 0 ? "active" : ""}" data-index="${i}" aria-label="Photo ${i + 1}"></button>`)
+    .join("");
+  return `<div class="${wrapperClass} gallery-slider">${slides}<div class="gallery-dots">${dots}</div></div>`;
+}
+
+function productGalleryImages(product) {
+  if (product.images && product.images.length) return product.images;
+  return product.image_url ? [product.image_url] : [];
+}
+
+/** Avance toutes les galeries visibles à l'écran d'une image (diaporama auto). */
+function tickGalleries() {
+  document.querySelectorAll(".gallery-slider").forEach((slider) => {
+    const slides = Array.from(slider.querySelectorAll(":scope > .slide"));
+    if (slides.length < 2) return;
+    let idx = slides.findIndex((s) => s.classList.contains("active"));
+    if (idx === -1) idx = 0;
+    const next = (idx + 1) % slides.length;
+    slides[idx].classList.remove("active");
+    slides[next].classList.add("active");
+    const dots = slider.querySelectorAll(".gallery-dot");
+    dots.forEach((d, i) => d.classList.toggle("active", i === next));
+  });
+}
+
+function bindGalleryDotClicks() {
+  document.addEventListener("click", (event) => {
+    const dot = event.target.closest(".gallery-dot");
+    if (!dot) return;
+    const slider = dot.closest(".gallery-slider");
+    if (!slider) return;
+    const index = Number(dot.dataset.index);
+    const slides = Array.from(slider.querySelectorAll(":scope > .slide"));
+    slides.forEach((s, i) => s.classList.toggle("active", i === index));
+    slider.querySelectorAll(".gallery-dot").forEach((d, i) => d.classList.toggle("active", i === index));
+  });
+}
+
 function productCard(product) {
-  const image = product.image_url
-    ? `<div class="product-image"><img src="${escapeHtml(product.image_url)}" alt="${escapeHtml(product.name)}"></div>`
-    : `<div class="product-image"><div class="product-placeholder">🔌</div></div>`;
+  const image = buildGalleryMarkup(productGalleryImages(product), "product-image");
   return `
     <article class="product-card">
       ${image}
@@ -195,7 +251,7 @@ function renderProducts() {
   const countEl = document.getElementById("catalog-count");
 
   if (homeEl) homeEl.innerHTML = homeProducts.map(productCard).join("") || `<p class="muted">Aucun produit mis en avant.</p>`;
-  if (catalogEl) catalogEl.innerHTML = catalogProducts.map(productCard).join("") || `<div class="panel"><h3>Aucun matelas trouvé</h3></div>`;
+  if (catalogEl) catalogEl.innerHTML = catalogProducts.map(productCard).join("") || `<div class="panel"><h3>Aucun appareil trouvé</h3></div>`;
   if (countEl) countEl.textContent = `${catalogProducts.length} produit${catalogProducts.length > 1 ? "s" : ""}`;
 
   document.querySelectorAll(".order-btn").forEach((btn) =>
@@ -492,9 +548,7 @@ function openProductModal(productId) {
   const product = getProductById(productId);
   if (!product) return;
   state.activeProductId = productId;
-  const visual = product.image_url
-    ? `<div class="product-detail-visual"><img src="${escapeHtml(product.image_url)}" alt="${escapeHtml(product.name)}"></div>`
-    : `<div class="product-detail-visual"><div class="product-placeholder">🔌</div></div>`;
+  const visual = buildGalleryMarkup(productGalleryImages(product), "product-detail-visual");
   document.getElementById("product-detail").innerHTML = `
     ${visual}
     <div class="detail-copy">
@@ -788,7 +842,7 @@ function switchAdminTab(tab) {
 }
 
 function resetProductForm() {
-  state.admin.imageData = "";
+  state.admin.imagesData = [];
   const form = document.getElementById("product-form");
   form.reset();
   form.querySelector('[name="id"]').value = "";
@@ -802,6 +856,7 @@ function resetProductForm() {
 function populateProductForm(productId) {
   const product = state.admin.products.find((item) => item.id === productId);
   if (!product) return;
+  state.admin.imagesData = [];
   const form = document.getElementById("product-form");
   form.querySelector('[name="id"]').value = String(product.id);
   form.querySelector('[name="name"]').value = product.name;
@@ -817,8 +872,9 @@ function populateProductForm(productId) {
   form.querySelector('[name="pickup_location"]').value = product.pickup_location || "";
   form.querySelector('[name="description"]').value = product.description;
   document.getElementById("product-form-title").textContent = "Modifier un produit";
-  document.getElementById("product-image-preview").innerHTML = product.image_url
-    ? `<img src="${escapeHtml(product.image_url)}" alt="${escapeHtml(product.name)}">`
+  const existingImages = productGalleryImages(product);
+  document.getElementById("product-image-preview").innerHTML = existingImages.length
+    ? existingImages.map((src) => `<img src="${escapeHtml(src)}" alt="${escapeHtml(product.name)}">`).join("")
     : "Aucune image";
   switchAdminTab("editor");
 }
@@ -851,7 +907,8 @@ async function submitProductForm(event) {
     featured: form.querySelector('[name="featured"]').checked,
     pickup_location: form.querySelector('[name="pickup_location"]').value.trim(),
     description: form.querySelector('[name="description"]').value.trim(),
-    image_data: state.admin.imageData,
+    image_data: state.admin.imagesData[0] || "",
+    images_data: state.admin.imagesData,
   };
   const isEdit = Boolean(payload.id);
   try {
@@ -872,18 +929,26 @@ function bindImageInput() {
   const input = document.querySelector('#product-form [name="image_file"]');
   if (!input) return;
   input.addEventListener("change", (event) => {
-    const file = event.target.files?.[0];
-    if (!file) {
-      state.admin.imageData = "";
+    const files = Array.from(event.target.files || []).slice(0, 6);
+    if (!files.length) {
+      state.admin.imagesData = [];
       document.getElementById("product-image-preview").innerHTML = "Aperçu image";
       return;
     }
-    const reader = new FileReader();
-    reader.onload = () => {
-      state.admin.imageData = reader.result;
-      document.getElementById("product-image-preview").innerHTML = `<img src="${reader.result}" alt="Aperçu">`;
-    };
-    reader.readAsDataURL(file);
+    const readers = files.map(
+      (file) =>
+        new Promise((resolve) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result);
+          reader.readAsDataURL(file);
+        })
+    );
+    Promise.all(readers).then((results) => {
+      state.admin.imagesData = results;
+      document.getElementById("product-image-preview").innerHTML = results
+        .map((src) => `<img src="${src}" alt="Aperçu">`)
+        .join("");
+    });
   });
 }
 
@@ -959,7 +1024,6 @@ function bindCatalogControls() {
 }
 
 function bindEvents() {
-  // Menu switcher boutiques
   const switcherBtn = document.getElementById("shop-switcher-btn");
   const switcherMenu = document.getElementById("shop-switcher-menu");
   if (switcherBtn && switcherMenu) {
@@ -970,19 +1034,16 @@ function bindEvents() {
     document.addEventListener("click", () => switcherMenu.classList.add("hidden"));
   }
 
-  // Navigation
   document.querySelectorAll("[data-page]").forEach((btn) =>
     btn.addEventListener("click", () => navigateTo(btn.dataset.page))
   );
 
-  // Menu mobile
   document.getElementById("menu-toggle").addEventListener("click", () => {
     const nav = document.getElementById("main-nav");
     const isOpen = nav.classList.toggle("open");
     document.getElementById("menu-toggle").setAttribute("aria-expanded", String(isOpen));
   });
 
-  // Modaux
   document.getElementById("close-order-modal").addEventListener("click", closeOrderModal);
   document.getElementById("close-product-modal").addEventListener("click", closeProductModal);
   document.getElementById("close-cart-modal").addEventListener("click", closeCartModal);
@@ -999,7 +1060,6 @@ function bindEvents() {
   document.getElementById("cart-clear-btn").addEventListener("click", () => { if (confirm("Vider le panier ?")) clearCart(); });
   document.getElementById("cart-checkout-btn").addEventListener("click", () => { closeCartModal(); openOrderModal(); });
 
-  // Formulaires
   document.getElementById("order-form").addEventListener("submit", submitOrder);
   document.getElementById("contact-form").addEventListener("submit", submitContact);
   document.getElementById("admin-login-form").addEventListener("submit", adminLogin);
@@ -1009,7 +1069,6 @@ function bindEvents() {
   document.getElementById("clear-home-background-btn").addEventListener("click", clearHomeBackground);
   document.getElementById("admin-logout-btn").addEventListener("click", logoutAdmin);
 
-  // Tabs admin
   document.querySelectorAll(".tab-btn").forEach((btn) =>
     btn.addEventListener("click", () => switchAdminTab(btn.dataset.adminTab))
   );
@@ -1017,6 +1076,8 @@ function bindEvents() {
   bindCatalogControls();
   bindImageInput();
   bindHomeBackgroundInput();
+  bindGalleryDotClicks();
+  setInterval(tickGalleries, GALLERY_TICK_MS);
 }
 
 async function init() {
