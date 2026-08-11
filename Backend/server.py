@@ -207,6 +207,7 @@ def to_public_product(row) -> dict:
         "formatted_price": f"{row['price_gnf']:,}".replace(",", " ") + " GNF",
         "description": row["description"],
         "image_url": row["image_url"],
+        "images": json.loads(row["images"] or "[]"),
         "rating": row["rating"],
         "review_count": row["review_count"],
         "stock_status": row["stock_status"],
@@ -279,11 +280,16 @@ def _uploads_dir_for_shop(shop: str) -> Path:
 
 
 def _delete_upload(url: str, shop: str = "matelas") -> None:
-    """Supprime un fichier uploadé à partir de son URL relative (/uploads/...)."""
+    """Supprime un fichier uploadé à partir de son URL relative (/uploads/... ou /electrique/uploads/...)."""
     if not url:
         return
     base_dir = _public_dir_for_shop(shop)
-    path = base_dir / url.lstrip("/")
+    relative = url.lstrip("/")
+    shop_prefix_map = {"meubles": "meubles/", "electrique": "electrique/"}
+    prefix = shop_prefix_map.get(shop)
+    if prefix and relative.startswith(prefix):
+        relative = relative[len(prefix):]
+    path = base_dir / relative
     try:
         path.unlink(missing_ok=True)
     except OSError as exc:
@@ -314,7 +320,18 @@ def save_base64_image(image_data: str, filename_prefix: str, shop: str = "matela
     target_dir.mkdir(parents=True, exist_ok=True)
     output_path = target_dir / filename
     output_path.write_bytes(file_bytes)
-    return f"/uploads/{filename}"
+    shop_prefix = {"meubles": "/meubles", "electrique": "/electrique"}.get(shop, "")
+    return f"{shop_prefix}/uploads/{filename}"
+
+
+def save_multiple_images(images_data: list, filename_prefix: str, shop: str = "matelas") -> list:
+    """Sauvegarde plusieurs images base64 (max 6) et retourne la liste des URLs."""
+    urls = []
+    for img in (images_data or [])[:6]:
+        url = save_base64_image(img, filename_prefix, shop)
+        if url:
+            urls.append(url)
+    return urls
 
 
 def init_database() -> None:
@@ -415,6 +432,7 @@ def init_database() -> None:
     ensure_column(conn, "contacts", "updated_at", "TEXT NOT NULL DEFAULT ''")
     ensure_column(conn, "products", "shop", "TEXT NOT NULL DEFAULT 'matelas'")
     ensure_column(conn, "products", "pickup_location", "TEXT NOT NULL DEFAULT ''")
+    ensure_column(conn, "products", "images", "TEXT NOT NULL DEFAULT '[]'")
     ensure_column(conn, "orders", "shop", "TEXT NOT NULL DEFAULT 'matelas'")
     ensure_column(conn, "contacts", "shop", "TEXT NOT NULL DEFAULT 'matelas'")
     conn.execute("UPDATE orders SET updated_at = created_at WHERE updated_at = '' OR updated_at IS NULL")
@@ -453,6 +471,29 @@ def init_database() -> None:
         )
     if legacy_orders:
         conn.commit()
+
+    # Migration : corrige les images de produits/fonds enregistrées avant le correctif
+    # du préfixe de chemin (elles pointaient vers /uploads/... au lieu de
+    # /meubles/uploads/... ou /electrique/uploads/...).
+    for shop_name, prefix in (("meubles", "/meubles"), ("electrique", "/electrique")):
+        conn.execute(
+            """
+            UPDATE products
+            SET image_url = ? || image_url
+            WHERE shop = ? AND image_url LIKE '/uploads/%'
+            """,
+            (prefix, shop_name),
+        )
+        bg_column = "home_background_url_meubles" if shop_name == "meubles" else "home_background_url_electrique"
+        conn.execute(
+            f"""
+            UPDATE site_settings
+            SET {bg_column} = ? || {bg_column}
+            WHERE {bg_column} LIKE '/uploads/%'
+            """,
+            (prefix,),
+        )
+    conn.commit()
 
     existing_admin = cur.execute(
         "SELECT id, password_hash FROM admin_users WHERE username = ?", (ADMIN_USERNAME,)
@@ -1081,7 +1122,9 @@ class DjibShopHandler(SimpleHTTPRequestHandler):
         try:
             body = self.parse_json_body()
             price = self.validate_product_payload(body)
-            image_url = save_base64_image(body.get("image_data", ""), "product", shop) if body.get("image_data") else ""
+            images_data = body.get("images_data") or ([body["image_data"]] if body.get("image_data") else [])
+            image_urls = save_multiple_images(images_data, "product", shop) if images_data else []
+            image_url = image_urls[0] if image_urls else ""
         except ValueError as exc:
             return json_response(self, {"error": str(exc)}, HTTPStatus.BAD_REQUEST)
 
@@ -1090,9 +1133,9 @@ class DjibShopHandler(SimpleHTTPRequestHandler):
             """
             INSERT INTO products (
                 shop, name, category, mattress_type, size_label, dimensions, price_gnf,
-                description, image_url, rating, review_count, stock_status, featured, pickup_location,
+                description, image_url, images, rating, review_count, stock_status, featured, pickup_location,
                 created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 shop,
@@ -1104,6 +1147,7 @@ class DjibShopHandler(SimpleHTTPRequestHandler):
                 price,
                 body["description"].strip(),
                 image_url,
+                json.dumps(image_urls),
                 float(body.get("rating") or 0),
                 int(body.get("review_count") or 0),
                 body["stock_status"].strip(),
@@ -1133,21 +1177,30 @@ class DjibShopHandler(SimpleHTTPRequestHandler):
             return json_response(self, {"error": "Produit introuvable."}, HTTPStatus.NOT_FOUND)
 
         image_url = existing["image_url"]
-        if body.get("image_data"):
+        images_json = existing["images"] or "[]"
+        images_data = body.get("images_data") or ([body["image_data"]] if body.get("image_data") else [])
+        if images_data:
             try:
-                new_image_url = save_base64_image(body["image_data"], "product", shop)
+                new_image_urls = save_multiple_images(images_data, "product", shop)
             except ValueError as exc:
                 conn.close()
                 return json_response(self, {"error": str(exc)}, HTTPStatus.BAD_REQUEST)
-            # Supprimer l'ancienne image pour éviter l'accumulation de fichiers orphelins
-            _delete_upload(existing["image_url"], shop)
-            image_url = new_image_url
+            if not new_image_urls:
+                conn.close()
+                return json_response(self, {"error": "Aucune image valide fournie."}, HTTPStatus.BAD_REQUEST)
+            # Supprimer toutes les anciennes images de la galerie
+            for old_url in json.loads(images_json):
+                _delete_upload(old_url, shop)
+            if existing["image_url"] and existing["image_url"] not in json.loads(images_json):
+                _delete_upload(existing["image_url"], shop)
+            image_url = new_image_urls[0]
+            images_json = json.dumps(new_image_urls)
 
         conn.execute(
             """
             UPDATE products
             SET name = ?, category = ?, mattress_type = ?, size_label = ?, dimensions = ?, price_gnf = ?,
-                description = ?, image_url = ?, rating = ?, review_count = ?, stock_status = ?, featured = ?,
+                description = ?, image_url = ?, images = ?, rating = ?, review_count = ?, stock_status = ?, featured = ?,
                 pickup_location = ?, updated_at = ?
             WHERE id = ? AND shop = ?
             """,
@@ -1160,6 +1213,7 @@ class DjibShopHandler(SimpleHTTPRequestHandler):
                 price,
                 body["description"].strip(),
                 image_url,
+                images_json,
                 float(body.get("rating") or 0),
                 int(body.get("review_count") or 0),
                 body["stock_status"].strip(),
@@ -1287,8 +1341,12 @@ class DjibShopHandler(SimpleHTTPRequestHandler):
         conn.execute("DELETE FROM products WHERE id = ? AND shop = ?", (product_id, shop))
         conn.commit()
         conn.close()
-        # Supprimer l'image associée
-        _delete_upload(existing["image_url"], shop)
+        # Supprimer toutes les images de la galerie (+ couverture si distincte)
+        gallery_urls = json.loads(existing["images"] or "[]")
+        for url in gallery_urls:
+            _delete_upload(url, shop)
+        if existing["image_url"] and existing["image_url"] not in gallery_urls:
+            _delete_upload(existing["image_url"], shop)
         return json_response(self, {"success": True})
 
     def delete_order(self, order_id, shop="matelas"):
