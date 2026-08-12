@@ -34,7 +34,7 @@ const productFilters = [
 ];
 
 const PRODUCT_PLACEHOLDER = "🛏️";
-const GALLERY_TICK_MS = 3000;
+const GALLERY_TICK_MS = 5000;
 
 async function apiFetch(url, options = {}) {
   const response = await fetch(url, {
