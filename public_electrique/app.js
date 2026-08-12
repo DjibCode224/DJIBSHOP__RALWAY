@@ -32,7 +32,7 @@ const productFilters = [
 ];
 
 const PRODUCT_PLACEHOLDER = "🔌";
-const GALLERY_TICK_MS = 3000;
+const GALLERY_TICK_MS = 6000;
 
 async function apiFetch(url, options = {}) {
   if (url.startsWith("/api/")) {
