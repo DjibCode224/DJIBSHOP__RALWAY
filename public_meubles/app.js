@@ -34,7 +34,6 @@ const productFilters = [
 ];
 
 const PRODUCT_PLACEHOLDER = "🛋️";
-const GALLERY_TICK_MS = 5000;
 
 async function apiFetch(url, options = {}) {
   if (url.startsWith("/api/")) {
@@ -176,7 +175,11 @@ function buildGalleryMarkup(images, wrapperClass) {
   const dots = list
     .map((_, i) => `<button type="button" class="gallery-dot ${i === 0 ? "active" : ""}" data-index="${i}" aria-label="Photo ${i + 1}"></button>`)
     .join("");
-  return `<div class="${wrapperClass} gallery-slider">${slides}<div class="gallery-dots">${dots}</div></div>`;
+  const arrows = `
+    <button type="button" class="gallery-arrow gallery-prev" data-dir="-1" aria-label="Photo précédente">&#8249;</button>
+    <button type="button" class="gallery-arrow gallery-next" data-dir="1" aria-label="Photo suivante">&#8250;</button>
+  `;
+  return `<div class="${wrapperClass} gallery-slider">${slides}${arrows}<div class="gallery-dots">${dots}</div></div>`;
 }
 
 function productGalleryImages(product) {
@@ -184,31 +187,37 @@ function productGalleryImages(product) {
   return product.image_url ? [product.image_url] : [];
 }
 
-/** Avance toutes les galeries visibles à l'écran d'une image (diaporama auto). */
-function tickGalleries() {
-  document.querySelectorAll(".gallery-slider").forEach((slider) => {
-    const slides = Array.from(slider.querySelectorAll(":scope > .slide"));
-    if (slides.length < 2) return;
-    let idx = slides.findIndex((s) => s.classList.contains("active"));
-    if (idx === -1) idx = 0;
-    const next = (idx + 1) % slides.length;
-    slides[idx].classList.remove("active");
-    slides[next].classList.add("active");
-    const dots = slider.querySelectorAll(".gallery-dot");
-    dots.forEach((d, i) => d.classList.toggle("active", i === next));
-  });
+function goToGallerySlide(slider, index) {
+  const slides = Array.from(slider.querySelectorAll(":scope > .slide"));
+  if (!slides.length) return;
+  const safeIndex = ((index % slides.length) + slides.length) % slides.length;
+  slides.forEach((s, i) => s.classList.toggle("active", i === safeIndex));
+  slider.querySelectorAll(".gallery-dot").forEach((d, i) => d.classList.toggle("active", i === safeIndex));
 }
 
-function bindGalleryDotClicks() {
+/** Navigation manuelle de la galerie : le client clique '<'/'>' ou un point pour changer de photo. */
+function bindGalleryControls() {
   document.addEventListener("click", (event) => {
+    const arrow = event.target.closest(".gallery-arrow");
+    if (arrow) {
+      event.preventDefault();
+      event.stopPropagation();
+      const slider = arrow.closest(".gallery-slider");
+      if (!slider) return;
+      const slides = Array.from(slider.querySelectorAll(":scope > .slide"));
+      let idx = slides.findIndex((s) => s.classList.contains("active"));
+      if (idx === -1) idx = 0;
+      goToGallerySlide(slider, idx + Number(arrow.dataset.dir));
+      return;
+    }
     const dot = event.target.closest(".gallery-dot");
-    if (!dot) return;
-    const slider = dot.closest(".gallery-slider");
-    if (!slider) return;
-    const index = Number(dot.dataset.index);
-    const slides = Array.from(slider.querySelectorAll(":scope > .slide"));
-    slides.forEach((s, i) => s.classList.toggle("active", i === index));
-    slider.querySelectorAll(".gallery-dot").forEach((d, i) => d.classList.toggle("active", i === index));
+    if (dot) {
+      event.preventDefault();
+      event.stopPropagation();
+      const slider = dot.closest(".gallery-slider");
+      if (!slider) return;
+      goToGallerySlide(slider, Number(dot.dataset.index));
+    }
   });
 }
 
@@ -1078,8 +1087,7 @@ function bindEvents() {
   bindCatalogControls();
   bindImageInput();
   bindHomeBackgroundInput();
-  bindGalleryDotClicks();
-  setInterval(tickGalleries, GALLERY_TICK_MS);
+  bindGalleryControls();
 }
 
 async function init() {
